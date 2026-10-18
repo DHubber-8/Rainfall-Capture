@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 import json
 from statistics import mean
 from typing import Any
+
+from .clock import sg_now
+
+EXPECTED_RAIN_READINGS = 288  # one 5-minute total per station per day
+COMPLETE_FRACTION = 0.9
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,18 @@ def _rain_totals(payload: dict[str, Any], target: date, station_ids: set[str]) -
     return totals, count, min(timestamps) if timestamps else None, max(timestamps) if timestamps else None
 
 
+def _rain_complete(count: int, stations: int) -> bool:
+    return stations > 0 and count >= EXPECTED_RAIN_READINGS * stations * COMPLETE_FRACTION
+
+
+def daily_rain_total(payload: dict[str, Any], target: date, station_ids: set[str]) -> tuple[float | None, bool]:
+    """(mean-of-stations rainfall for the day, whether the day's coverage is complete)."""
+    totals, count, _, _ = _rain_totals(payload, target, station_ids)
+    if not totals:
+        return None, False
+    return mean(totals.values()), _rain_complete(count, len(totals))
+
+
 def aggregate(
     target: date,
     rainfall: dict[str, Any],
@@ -56,23 +73,19 @@ def aggregate(
     psi: dict[str, Any],
     pm25: dict[str, Any],
     station_ids: list[str],
-    previous_rainfall: dict[str, Any] | None = None,
+    previous_rain_24h: float | None = None,
+    temp_sample_minutes: int | None = None,
+    now: datetime | None = None,
 ) -> AggregatedReading:
+    """Combine one day of API payloads. Missing data stays None; nothing is estimated."""
     configured = set(station_ids)
     rain_totals, rain_count, rain_first, rain_last = _rain_totals(rainfall, target, configured)
     rain_stations = sorted(rain_totals)
     rain_24h = mean(rain_totals.values()) if rain_totals else None
-    partial = rain_count < 288 * len(rain_stations) * 0.9 if rain_stations else True
+    day_not_over = target >= (now or sg_now()).date()
+    partial = day_not_over or not _rain_complete(rain_count, len(rain_stations))
 
-    rain_48h = None
-    if previous_rainfall is not None and rain_totals:
-        previous_totals, previous_count, previous_first, previous_last = _rain_totals(
-            previous_rainfall, target - timedelta(days=1), configured
-        )
-        if previous_totals and previous_count >= 288 * len(previous_totals) * 0.9:
-            rain_48h = mean(rain_totals.values()) + mean(previous_totals.values())
-    else:
-        previous_first = previous_last = None
+    rain_48h = rain_24h + previous_rain_24h if rain_24h is not None and previous_rain_24h is not None else None
 
     temp_values: list[float] = []
     temp_stations: set[str] = set()
@@ -107,13 +120,12 @@ def aggregate(
             "reading_count": rain_count,
             "first_timestamp": rain_first,
             "last_timestamp": rain_last,
-            "previous_reading_count": previous_count if previous_rainfall is not None else 0,
-            "previous_first_timestamp": previous_first if previous_rainfall is not None else None,
-            "previous_last_timestamp": previous_last if previous_rainfall is not None else None,
+            "previous_day_mm": previous_rain_24h,
         },
         "air_temperature": {
             "stations": sorted(temp_stations),
             "reading_count": len(temp_values),
+            "sample_minutes": temp_sample_minutes,
             "first_timestamp": min(temp_timestamps) if temp_timestamps else None,
             "last_timestamp": max(temp_timestamps) if temp_timestamps else None,
         },

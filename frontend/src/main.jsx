@@ -15,8 +15,10 @@ import {
 import "./styles.css";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-const today = new Date().toISOString().slice(0, 10);
-const startOfYear = `${new Date().getFullYear()}-01-01`;
+const sgDate = (offsetDays = 0) =>
+  new Date(Date.now() + offsetDays * 86400000).toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
+const today = sgDate();
+const defaultFrom = sgDate(-60); // a 60-day window; widen it (or use "Backfill missing days") for older data
 
 function formatValue(value, suffix = "") {
   return value == null ? "—" : `${Number(value).toFixed(1)}${suffix}`;
@@ -29,6 +31,7 @@ function dateLabel(value) {
 }
 
 function isPartial(reading) {
+  if (typeof reading.partial === "boolean") return reading.partial;
   if (!reading.rain_reading_count) return false;
   const raw = reading.raw_json ? JSON.parse(reading.raw_json) : null;
   const stationCount = raw?.rainfall?.stations?.length || 1;
@@ -67,12 +70,13 @@ function ChartTooltip({ active, payload, label }) {
 }
 
 function Dashboard() {
-  const [from, setFrom] = useState(startOfYear);
+  const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(today);
   const [readings, setReadings] = useState([]);
   const [stats, setStats] = useState(null);
   const [fetchResults, setFetchResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(null);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(null);
 
@@ -99,21 +103,55 @@ function Dashboard() {
     partial: isPartial(reading),
   })), [readings]);
 
+  // Fetches run as background jobs on the server; poll until the job finishes.
+  const waitForJob = async (job) => {
+    let status = job;
+    while (status.status === "running") {
+      setProgress({ done: status.completed, total: status.total });
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      status = await api(`/api/jobs/${status.id}`);
+    }
+    return status;
+  };
+
+  const finishJob = async (job) => {
+    const done = await waitForJob(job);
+    setFetchResults(done.results);
+    if (done.error) setError(done.error);
+    await loadDashboard();
+  };
+
   const runFetch = async (backfill = false) => {
     setLoading(true);
     setError("");
     setFetchResults([]);
     try {
-      const range = { from, to };
-      const result = await api(backfill ? "/api/backfill" : `/api/fetch?from=${range.from}&to=${range.to}`, { method: "POST" });
-      setFetchResults(result);
-      await loadDashboard();
+      const job = await api(backfill ? "/api/backfill" : `/api/fetch?from=${from}&to=${to}`, { method: "POST" });
+      await finishJob(job);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   };
+
+  // If a fetch (e.g. the startup backfill) is already running, show its progress instead of a blank page.
+  useEffect(() => {
+    (async () => {
+      try {
+        const job = await api("/api/jobs/current");
+        if (!job) return;
+        setLoading(true);
+        await finishJob(job);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+        setProgress(null);
+      }
+    })();
+  }, []);
 
   const saveManual = async (reading, values) => {
     try {
@@ -145,7 +183,7 @@ function Dashboard() {
         <label>To<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
         <button onClick={loadDashboard} disabled={loading}>Apply range</button>
         <button className="primary" onClick={() => runFetch(false)} disabled={loading}>
-          {loading ? "Fetching…" : "Fetch from data.gov.sg"}
+          {loading ? (progress ? `Fetching ${progress.done}/${progress.total} days…` : "Fetching…") : "Fetch from data.gov.sg"}
         </button>
         <button className="secondary" onClick={() => runFetch(true)} disabled={loading}>Backfill missing days</button>
       </section>

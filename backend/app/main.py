@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 import asyncio
 import os
@@ -8,14 +9,30 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import create_tables, get_db
-from .fetching import fetch_range
+from .fetching import date_span
+from .jobs import Job, JobBusy, current_job, get_job, start_job
 from .models import Reading
-from .scheduler import backfill_missing, create_scheduler
-from .schemas import FetchStatus, ManualReadingUpdate, ReadingResponse, StatsResponse
+from .scheduler import create_scheduler, missing_dates, startup_backfill
+from .schemas import FetchStatus, JobStatus, ManualReadingUpdate, ReadingResponse, StatsResponse
 
-
-app = FastAPI(title="Woodlands Rain & Haze Dashboard")
 scheduler = None
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    global scheduler
+    create_tables()
+    if os.getenv("ENABLE_SCHEDULER", "1").lower() in {"1", "true", "yes"}:
+        scheduler = create_scheduler()
+        scheduler.start()
+    if os.getenv("BACKFILL_ON_STARTUP", "1").lower() in {"1", "true", "yes"}:
+        asyncio.create_task(startup_backfill())
+    yield
+    if scheduler is not None:
+        scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="Woodlands Rain & Haze Dashboard", lifespan=lifespan)
 origins = [
     item.strip()
     for item in os.getenv(
@@ -31,23 +48,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def startup() -> None:
-    global scheduler
-    create_tables()
-    if os.getenv("ENABLE_SCHEDULER", "1").lower() in {"1", "true", "yes"}:
-        scheduler = create_scheduler()
-        scheduler.start()
-    if os.getenv("BACKFILL_ON_STARTUP", "0").lower() in {"1", "true", "yes"}:
-        asyncio.create_task(backfill_missing())
-
-
-@app.on_event("shutdown")
-def shutdown() -> None:
-    if scheduler is not None:
-        scheduler.shutdown(wait=False)
 
 
 @app.get("/api/readings", response_model=list[ReadingResponse])
@@ -122,20 +122,51 @@ def update_manual_fields(
     return reading
 
 
-@app.post("/api/fetch", response_model=list[FetchStatus])
-async def fetch_readings(
-    from_date: date = Query(alias="from"),
-    to_date: date = Query(alias="to"),
-    db: Session = Depends(get_db),
-) -> list[FetchStatus]:
+def _job_status(job: Job) -> JobStatus:
+    return JobStatus(
+        id=job.id,
+        kind=job.kind,
+        status=job.status,
+        total=job.total,
+        completed=job.completed,
+        results=[FetchStatus.model_validate(item, from_attributes=True) for item in job.results],
+        error=job.error,
+    )
+
+
+def _start(kind: str, dates: list[date]) -> JobStatus:
     try:
-        results = await fetch_range(db, from_date, to_date)
+        job = start_job(kind, dates)
+    except JobBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _job_status(job)
+
+
+@app.post("/api/fetch", response_model=JobStatus, status_code=202)
+async def fetch_readings(from_date: date = Query(alias="from"), to_date: date = Query(alias="to")):
+    """Starts a background fetch and returns a job to poll at /api/jobs/{id}."""
+    try:
+        dates = date_span(from_date, to_date)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return [FetchStatus.model_validate(result, from_attributes=True) for result in results]
+    return _start("fetch", dates)
 
 
-@app.post("/api/backfill", response_model=list[FetchStatus])
-async def backfill_readings() -> list[FetchStatus]:
-    results = await backfill_missing()
-    return [FetchStatus.model_validate(result, from_attributes=True) for result in results]
+@app.post("/api/backfill", response_model=JobStatus, status_code=202)
+async def backfill_readings():
+    """Background-fetches every date since BACKFILL_FROM that has no trustworthy stored data."""
+    return _start("backfill", missing_dates())
+
+
+@app.get("/api/jobs/current", response_model=JobStatus | None)
+async def running_job() -> JobStatus | None:
+    job = current_job()
+    return _job_status(job) if job else None
+
+
+@app.get("/api/jobs/{job_id}", response_model=JobStatus)
+def job_status(job_id: str) -> JobStatus:
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job")
+    return _job_status(job)

@@ -23,6 +23,7 @@ class ReadingResponse(BaseModel):
     temp_reading_count: int
     psi_reading_count: int
     pm25_reading_count: int
+    partial: bool
 
 
 class ManualReadingUpdate(BaseModel):
@@ -61,3 +62,13 @@ class StatsResponse(BaseModel):
     average_pm25: float | None
     haze_days_with_rain_after: int
     basis_days: dict[str, int]
+
+
+class JobStatus(BaseModel):
+    id: str
+    kind: str
+    status: str
+    total: int
+    completed: int
+    results: list[FetchStatus]
+    error: str | None = None

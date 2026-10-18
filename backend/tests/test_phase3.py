@@ -36,6 +36,9 @@ class FixtureClient:
             return load("psi-2026-10-15.json")
         return load("pm25-2026-10-15.json")
 
+    async def fetch_snapshots(self, endpoint, target, step_minutes, until=None):
+        return load("air-temperature-2026-10-15.json")
+
 
 @pytest.fixture
 def db(tmp_path):
@@ -69,13 +72,14 @@ async def test_fetch_empty_day_does_not_create_row(db):
 
 @pytest.mark.asyncio
 async def test_fetch_range_is_capped(db):
-    with pytest.raises(ValueError, match="31 days"):
-        await fetch_range(db, date(2026, 1, 1), date(2026, 2, 1), lambda: FixtureClient(), delay=0)
+    with pytest.raises(ValueError, match="366 days"):
+        await fetch_range(db, date(2025, 1, 1), date(2026, 2, 1), lambda: FixtureClient(), delay=0)
 
 
-def test_fetch_endpoint_rejects_ranges_over_31_days(monkeypatch):
+def test_fetch_endpoint_rejects_ranges_over_the_cap(monkeypatch):
     from fastapi.testclient import TestClient
 
+    monkeypatch.setenv("MAX_FETCH_DAYS", "31")
     client = TestClient(app)
     response = client.post("/api/fetch?from=2026-01-01&to=2026-02-01")
     assert response.status_code == 400

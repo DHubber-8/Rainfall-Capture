@@ -67,7 +67,7 @@ async def test_client_follows_pagination(monkeypatch):
         async def aclose(self):
             pass
 
-    async with DataGovClient(client=FakeClient()) as client:
+    async with DataGovClient(client=FakeClient(), request_interval=0) as client:
         payload = await client.fetch_all("rainfall", "2026-10-15")
     assert [item["timestamp"] for item in payload["data"]["readings"]] == ["a", "b"]
 
@@ -91,7 +91,7 @@ async def test_client_retries_429(monkeypatch):
         sleeps.append(seconds)
 
     monkeypatch.setattr("app.client.asyncio.sleep", fake_sleep)
-    async with DataGovClient(client=FakeClient()) as client:
+    async with DataGovClient(client=FakeClient(), request_interval=0) as client:
         await client.fetch_all("psi", "2026-10-15")
     assert sleeps == [1]
 
@@ -105,7 +105,7 @@ async def test_client_accepts_real_no_data_response():
         async def aclose(self):
             pass
 
-    async with DataGovClient(client=FakeClient()) as client:
+    async with DataGovClient(client=FakeClient(), request_interval=0) as client:
         payload = await client.fetch_all("rainfall", "2026-12-31")
     assert payload["code"] == 17
     assert payload["data"] is None
@@ -120,6 +120,6 @@ async def test_client_raises_after_429_retries(monkeypatch):
         async def aclose(self):
             pass
 
-    async with DataGovClient(client=FakeClient(), max_retries=0) as client:
+    async with DataGovClient(client=FakeClient(), max_retries=0, request_interval=0) as client:
         with pytest.raises(DataGovError):
             await client.fetch_all("psi", "2026-10-15")

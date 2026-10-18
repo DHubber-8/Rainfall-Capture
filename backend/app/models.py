@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -28,4 +28,15 @@ class Reading(Base):
     temp_reading_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     psi_reading_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pm25_reading_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    partial: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+
+class FetchAttempt(Base):
+    """Last fetch outcome per date, so no-data and failed days are remembered instead of retried blindly."""
+
+    __tablename__ = "fetch_attempts"
+
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    message: Mapped[str | None] = mapped_column(Text)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
