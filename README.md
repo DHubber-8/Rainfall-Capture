@@ -5,16 +5,58 @@ stores them in SQLite and shows them in a React dashboard. Haze, rain-after-haze
 No data is seeded or estimated: a day with nothing from the API is a gap (NULL), never 0.
 
 ## Run
+## Run locally
+
+You need **Python 3.11+** and **Node 18+**. Use two terminals: the backend keeps running in the first one.
+
+### 1. Backend (terminal 1)
 ```bash
 cd backend
-python -m venv .venv && . .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -e ".[test]"
-cp .env.example .env                                  # add DATA_GOV_SG_API_KEY if you have one
-python -m app.probe                                   # how far back does the API have data? set BACKFILL_FROM
-uvicorn app.main:app --reload                         # http://localhost:8000
-cd ../frontend && npm install && npm run dev          # http://localhost:5173
-cd ../backend && pytest
+python -m venv .venv
 ```
+Activate the virtual environment:
+- macOS / Linux: `source .venv/bin/activate`
+- Windows PowerShell: `.venv\Scripts\Activate.ps1` (if blocked: `Set-ExecutionPolicy -Scope Process RemoteSigned`)
+- Windows cmd: `.venv\Scripts\activate.bat`
+
+```bash
+pip install -e ".[test]"
+```
+Create your settings file:
+- macOS / Linux: `cp .env.example .env`
+- Windows: `copy .env.example .env`
+
+Open `.env` and set `DATA_GOV_SG_API_KEY=` if you have a key (optional; leave it empty otherwise).
+
+Find out how far back the API has data, then put that date in `BACKFILL_FROM` in `.env`:
+```bash
+python -m app.probe
+```
+Start the server (leave it running):
+```bash
+uvicorn app.main:app --reload
+```
+Check it: http://localhost:8000/docs . On first start it creates `weather.db` and backfills missing days in the background.
+
+### 2. Frontend (terminal 2)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open http://localhost:5173 . If the backend is not on port 8000, create `frontend/.env` with `VITE_API_URL=http://localhost:PORT` and restart `npm run dev`.
+
+### 3. Tests (any terminal, backend venv active)
+```bash
+cd backend
+pytest
+```
+
+### Troubleshooting
+- **Page loads but shows a network or CORS error:** the backend is not running, or `CORS_ORIGINS` in `.env` doesn't include the address in your browser bar. Restart uvicorn after editing `.env`.
+- **Fetch shows `rate limit persisted` errors:** add an API key, or raise `DATA_GOV_REQUEST_INTERVAL` (for example `0.5`).
+- **A day shows `no-data`:** the API has nothing for that date. Run `python -m app.probe` to see its earliest date. These days are retried after `NO_DATA_RETRY_DAYS`.
+- **Start fresh:** stop the backend and delete `backend/weather.db`.
 
 ## How fetching works
 - **Rainfall**: the API gives 5-minute totals, so every page of the day is read (~12 requests) and summed.
