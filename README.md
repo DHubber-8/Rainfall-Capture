@@ -24,15 +24,17 @@ uv venv --python 3.14 .venv
 Alternatively, use `python -m venv .venv` when `python --version` reports a stable Python 3.11–3.14 version.
 
 Activate the virtual environment:
+```bash
 - macOS / Linux: `source .venv/bin/activate`
-- Windows PowerShell: `.venv\Scripts\Activate.ps1` (if blocked: `Set-ExecutionPolicy -Scope Process RemoteSigned`)
+- Windows PowerShell: `.venv\Scripts\Activate.ps1` or `.venv31\Scripts\Activate` (if blocked: `Set-ExecutionPolicy -Scope Process RemoteSigned`)
 - Windows cmd: `.venv\Scripts\activate.bat`
-
+```
+Followed by:
 ```bash
 pip install -e ".[test]"
 ```
 
-*Optional*
+**Optional:**
 If `.venv` was previously created with Python 3.15 alpha, remove that environment and recreate it with a stable interpreter before installing dependencies:
 
 ```powershell
@@ -41,17 +43,19 @@ uv venv --python 3.14 .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[test]"
 ```
-
+Next, do
 Create your settings file:
 - macOS / Linux: `cp .env.example .env`
 - Windows: `copy .env.example .env`
 
 Open `.env` and set `DATA_GOV_SG_API_KEY=` if you have a key (optional; leave it empty otherwise).
 
-Find out how far back the API has data, then put that date in `BACKFILL_FROM` in `.env`:
+To find out how far back the API has data,
 ```bash
 python -m app.probe
 ```
+then put that date in `BACKFILL_FROM` in `.env`.
+
 Start the server (leave it running):
 ```bash
 uvicorn app.main:app --reload
@@ -73,14 +77,6 @@ cd backend
 pytest
 ```
 
-### Troubleshooting
-- **The backend exits with `NameError: name 'sentinel' is not defined` while importing `anyio`:** the virtual environment is using Python 3.15 alpha or incompatible dependency wheels. Recreate `.venv` with stable Python 3.11–3.14 as shown above.
-- **The frontend says `Failed to fetch` or shows a refused connection:** confirm the backend terminal is still running and that http://localhost:8000/docs opens. If the backend uses another port, set `VITE_API_URL` in `frontend/.env` and restart the frontend.
-- **Page loads but shows a network or CORS error:** the backend is not running, or `CORS_ORIGINS` in `.env` doesn't include the address in your browser bar. Restart uvicorn after editing `.env`.
-- **Fetch shows `rate limit persisted` errors:** add an API key, or raise `DATA_GOV_REQUEST_INTERVAL` (for example `0.5`).
-- **A day shows `no-data`:** the API has nothing for that date. Run `python -m app.probe` to see its earliest date. These days are retried after `NO_DATA_RETRY_DAYS`.
-- **Start fresh:** stop the backend and delete `backend/weather.db`.
-
 ## How fetching works
 - **Rainfall**: the API gives 5-minute totals, so every page of the day is read (~12 requests) and summed.
   Sampling it hourly would keep only 1 of every 12 totals and under-report rain ~12x, so this is deliberately not sampled.
@@ -91,3 +87,11 @@ pytest
 - Backfill (startup, button, nightly) fetches days that are missing, only partially fetched, or only hold manual notes,
   and remembers days the API had no data for.
 - 48h rainfall = that day + the previous day, only when both days are complete; otherwise NULL.
+
+### Troubleshooting
+- **The backend exits with `NameError: name 'sentinel' is not defined` while importing `anyio`:** the virtual environment is using Python 3.15 alpha or incompatible dependency wheels. Recreate `.venv` with stable Python 3.11–3.14 as shown above.
+- **The frontend says `Failed to fetch` or shows a refused connection:** confirm the backend terminal is still running and that http://localhost:8000/docs opens. If the backend uses another port, set `VITE_API_URL` in `frontend/.env` and restart the frontend.
+- **Page loads but shows a network or CORS error:** the backend is not running, or `CORS_ORIGINS` in `.env` doesn't include the address in your browser bar. Restart uvicorn after editing `.env`.
+- **Fetch shows `rate limit persisted` errors:** add an API key, or raise `DATA_GOV_REQUEST_INTERVAL` (for example `0.5`).
+- **A day shows `no-data`:** the API has nothing for that date. Run `python -m app.probe` to see its earliest date. These days are retried after `NO_DATA_RETRY_DAYS`.
+- **Start fresh:** stop the backend and delete `backend/weather.db`.
